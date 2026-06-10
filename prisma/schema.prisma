@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Department {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees  User[]
+  budgets    DepartmentBudget[]
+}
+
+model DepartmentBudget {
+  id            Int      @id @default(autoincrement())
+  departmentId  Int
+  yearMonth     String
+  budgetAmount  Float    @default(0)
+  usedAmount    Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  department   Department         @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  transactions BudgetTransaction[]
+
+  @@unique([departmentId, yearMonth])
+}
+
+model BudgetTransaction {
+  id                Int      @id @default(autoincrement())
+  departmentBudgetId Int
+  reportId          Int
+  amount            Float
+  type              String
+  description       String?
+  operatorId        Int
+  createdAt         DateTime @default(now())
+
+  departmentBudget DepartmentBudget @relation(fields: [departmentBudgetId], references: [id], onDelete: Cascade)
+  report           ExpenseReport    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  name          String
+  passwordHash  String
+  role          String
+  departmentId  Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  department           Department?         @relation(fields: [departmentId], references: [id])
+  submittedExpenses    ExpenseReport[]     @relation("ExpenseCreator")
+  approvals            Approval[]          @relation("ApprovalApprover")
+  currentApprovals     ExpenseReport[]     @relation("CurrentApprover")
+}
+
+model ExpenseReport {
+  id                Int      @id @default(autoincrement())
+  title             String
+  description       String
+  totalAmount       Float
+  status            String   @default("DRAFT")
+  creatorId         Int
+  currentApproverId Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  submittedAt       DateTime?
+
+  creator          User          @relation("ExpenseCreator", fields: [creatorId], references: [id])
+  currentApprover  User?         @relation("CurrentApprover", fields: [currentApproverId], references: [id])
+  items            ExpenseItem[]
+  approvals        Approval[]
+}
+
+model ExpenseItem {
+  id          Int      @id @default(autoincrement())
+  reportId    Int
+  category    String
+  amount      Float
+  description String
+  receiptUrl  String?
+  date        DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  report ExpenseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+}
+
+model Approval {
+  id          Int      @id @default(autoincrement())
+  reportId    Int
+  approverId  Int
+  stepNumber  Int
+  role        String
+  status      String   @default("PENDING")
+  comment     String?
+  approvedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  report    ExpenseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  approver  User          @relation("ApprovalApprover", fields: [approverId], references: [id])
+}
