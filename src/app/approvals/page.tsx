@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { requireAuth } from '@/lib/permissions'
-import { getPendingApprovalsForUser, getAllExpenseReports } from '@/lib/queries'
+import { getPendingApprovalsForUserV2, getAllExpenseReports } from '@/lib/queries'
 import { ExpenseReportCard } from '@/components/ExpenseReportCard'
 import { CheckSquare, Inbox, Eye } from 'lucide-react'
 
@@ -11,7 +11,7 @@ export default async function ApprovalsPage() {
     redirect('/')
   }
 
-  const pendingApprovals = await getPendingApprovalsForUser(
+  const pendingApprovals = await getPendingApprovalsForUserV2(
     parseInt(user.id),
     user.role,
     user.departmentId

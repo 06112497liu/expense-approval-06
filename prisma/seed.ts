@@ -53,7 +53,7 @@ async function main() {
     },
   })
 
-  await prisma.user.upsert({
+  const financeUser = await prisma.user.upsert({
     where: { email: 'finance@company.com' },
     update: {},
     create: {
@@ -74,6 +74,17 @@ async function main() {
       passwordHash,
       role: 'MANAGER',
       departmentId: hrDept.id,
+    },
+  })
+
+  const generalManager = await prisma.user.upsert({
+    where: { email: 'gm@company.com' },
+    update: {},
+    create: {
+      email: 'gm@company.com',
+      name: '陈总经理',
+      passwordHash,
+      role: 'GENERAL_MANAGER',
     },
   })
 
@@ -101,9 +112,56 @@ async function main() {
     },
   })
 
+  const existingFlow = await prisma.approvalFlow.findFirst({
+    where: { isDefault: true },
+  })
+
+  if (!existingFlow) {
+    const flow = await prisma.approvalFlow.create({
+      data: {
+        name: '默认审批流',
+        description: '系统默认审批流程，金额大于500需总经理审批',
+        isDefault: true,
+        nodes: {
+          create: [
+            {
+              stepNumber: 1,
+              nodeName: '部门主管审批',
+              approvalType: 'SINGLE',
+              approverSource: 'DEPARTMENT_MANAGER',
+              conditionType: 'NONE',
+              isFinanceNode: false,
+            },
+            {
+              stepNumber: 2,
+              nodeName: '总经理审批',
+              approvalType: 'SINGLE',
+              approverSource: 'ROLE',
+              approverRole: 'GENERAL_MANAGER',
+              conditionType: 'AMOUNT_GREATER_THAN',
+              conditionValue: 500,
+              isFinanceNode: false,
+            },
+            {
+              stepNumber: 3,
+              nodeName: '财务审批',
+              approvalType: 'SINGLE',
+              approverSource: 'ROLE',
+              approverRole: 'FINANCE',
+              conditionType: 'NONE',
+              isFinanceNode: true,
+            },
+          ],
+        },
+      },
+    })
+    console.log('默认审批流已创建:', flow.name)
+  }
+
   console.log('种子数据创建完成!')
   console.log('测试账号 (密码均为 123456):')
   console.log('- 管理员: admin@company.com')
+  console.log('- 总经理: gm@company.com')
   console.log('- 技术部主管: tech.manager@company.com')
   console.log('- 人事部主管: hr.manager@company.com')
   console.log('- 财务: finance@company.com')

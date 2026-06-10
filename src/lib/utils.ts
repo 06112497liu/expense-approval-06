@@ -49,6 +49,7 @@ export function getRoleText(role: string): string {
     EMPLOYEE: '普通员工',
     MANAGER: '部门主管',
     FINANCE: '财务',
+    GENERAL_MANAGER: '总经理',
   }
   return map[role] || role
 }

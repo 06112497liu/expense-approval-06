@@ -195,3 +195,90 @@ export async function getFinanceUser() {
     },
   })
 }
+
+export async function getDefaultApprovalFlow() {
+  return prisma.approvalFlow.findFirst({
+    where: { isDefault: true },
+    include: {
+      nodes: {
+        orderBy: { stepNumber: 'asc' },
+        include: {
+          nodeUsers: {
+            include: { user: true },
+            orderBy: { orderIndex: 'asc' },
+          },
+        },
+      },
+    },
+  })
+}
+
+export async function getUserByRole(role: string) {
+  return prisma.user.findFirst({
+    where: { role },
+  })
+}
+
+export async function getPendingApprovalsForUserV2(
+  userId: number,
+  userRole: string,
+  userDepartmentId: number | null
+) {
+  if (userRole === 'ADMIN') {
+    return prisma.expenseReport.findMany({
+      where: { status: 'PENDING' },
+      include: {
+        creator: {
+          include: {
+            department: true,
+          },
+        },
+        currentApprover: true,
+        items: true,
+        approvals: {
+          include: {
+            approver: true,
+          },
+          orderBy: {
+            stepNumber: 'asc',
+          },
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    })
+  }
+
+  return prisma.expenseReport.findMany({
+    where: {
+      status: 'PENDING',
+      approvals: {
+        some: {
+          approverId: userId,
+          status: 'PENDING',
+        },
+      },
+    },
+    include: {
+      creator: {
+        include: {
+          department: true,
+        },
+      },
+      currentApprover: true,
+      items: true,
+      approvals: {
+        include: {
+          approver: true,
+        },
+        orderBy: {
+          stepNumber: 'asc',
+        },
+      },
+    },
+    orderBy: {
+      updatedAt: 'desc',
+    },
+  })
+}

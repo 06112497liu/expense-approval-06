@@ -13,6 +13,7 @@ import {
   User,
   PlusCircle,
   LayoutDashboard,
+  Workflow,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -71,7 +72,8 @@ export function Navbar() {
           show:
             user.role === 'MANAGER' ||
             user.role === 'FINANCE' ||
-            user.role === 'ADMIN',
+            user.role === 'ADMIN' ||
+            user.role === 'GENERAL_MANAGER',
         },
         {
           href: '/history',
@@ -91,6 +93,12 @@ export function Navbar() {
           icon: Building2,
           show: user.role === 'ADMIN',
         },
+        {
+          href: '/admin/approval-flows',
+          label: '审批流配置',
+          icon: Workflow,
+          show: user.role === 'ADMIN',
+        },
       ]
     : []
 
@@ -99,6 +107,7 @@ export function Navbar() {
     EMPLOYEE: '普通员工',
     MANAGER: '部门主管',
     FINANCE: '财务',
+    GENERAL_MANAGER: '总经理',
   }
 
   return (

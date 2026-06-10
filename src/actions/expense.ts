@@ -2,7 +2,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/permissions'
-import { getDepartmentManager, getFinanceUser, getExpenseReportById } from '@/lib/queries'
+import { getDepartmentManager, getFinanceUser, getExpenseReportById, getDefaultApprovalFlow, getUserByRole } from '@/lib/queries'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 
@@ -142,6 +142,118 @@ export async function submitExpenseReport(reportId: number) {
     throw new Error('用户没有所属部门')
   }
 
+  const approvalFlow = await getDefaultApprovalFlow()
+
+  if (!approvalFlow || approvalFlow.nodes.length === 0) {
+    return submitExpenseReportFallback(reportId, departmentId)
+  }
+
+  await prisma.approval.deleteMany({
+    where: { reportId },
+  })
+
+  const approvalsToCreate: {
+    approverId: number
+    stepNumber: number
+    role: string
+    status: string
+    nodeId: number
+    groupId: string | null
+  }[] = []
+
+  let stepCounter = 0
+  let firstApproverId: number | null = null
+
+  for (const node of approvalFlow.nodes) {
+    if (node.conditionType === 'AMOUNT_GREATER_THAN' && node.conditionValue) {
+      if (report.totalAmount <= node.conditionValue) {
+        continue
+      }
+    }
+
+    stepCounter++
+    const groupId =
+      node.approvalType !== 'SINGLE'
+        ? `node-${node.id}-${Date.now()}`
+        : null
+
+    const approvers = await getNodeApprovers(node, departmentId)
+    if (approvers.length === 0) {
+      throw new Error(`节点"${node.nodeName}"未找到审批人`)
+    }
+
+    for (let i = 0; i < approvers.length; i++) {
+      const approver = approvers[i]
+      approvalsToCreate.push({
+        approverId: approver.id,
+        stepNumber: stepCounter,
+        role: approver.role,
+        status: 'PENDING',
+        nodeId: node.id,
+        groupId,
+      })
+
+      if (firstApproverId === null) {
+        firstApproverId = approver.id
+      }
+    }
+  }
+
+  if (approvalsToCreate.length === 0) {
+    throw new Error('没有生成审批节点，请检查审批流配置')
+  }
+
+  await prisma.expenseReport.update({
+    where: { id: reportId },
+    data: {
+      status: 'PENDING',
+      submittedAt: new Date(),
+      currentApproverId: firstApproverId,
+      currentStepNumber: 1,
+      flowId: approvalFlow.id,
+      approvals: {
+        create: approvalsToCreate,
+      },
+    },
+  })
+
+  revalidatePath('/')
+  revalidatePath(`/expenses/${reportId}`)
+  revalidatePath('/expenses')
+  revalidatePath('/approvals')
+  redirect('/expenses')
+}
+
+async function getNodeApprovers(
+  node: {
+    id: number
+    approverSource: string
+    approverRole: string | null
+    nodeUsers: { userId: number; user: { id: number; role: string } }[]
+  },
+  departmentId: number
+) {
+  if (node.approverSource === 'ROLE' && node.approverRole) {
+    const user = await getUserByRole(node.approverRole)
+    return user ? [user] : []
+  }
+
+  if (node.approverSource === 'DEPARTMENT_MANAGER') {
+    const manager = await getDepartmentManager(departmentId)
+    return manager ? [manager] : []
+  }
+
+  if (node.approverSource === 'USER') {
+    return node.nodeUsers.map((nu) => nu.user)
+  }
+
+  return []
+}
+
+async function submitExpenseReportFallback(
+  reportId: number,
+  departmentId: number
+) {
   const departmentManager = await getDepartmentManager(departmentId)
   if (!departmentManager) {
     throw new Error('部门没有主管')
@@ -159,6 +271,7 @@ export async function submitExpenseReport(reportId: number) {
       status: 'PENDING',
       submittedAt: new Date(),
       currentApproverId: departmentManager.id,
+      currentStepNumber: 1,
       approvals: {
         create: [
           {
@@ -195,6 +308,7 @@ export async function approveReport(reportId: number, comment?: string) {
     throw new Error('未登录')
   }
 
+  const userId = parseInt(user.id)
   const report = await getExpenseReportById(reportId)
   if (!report) {
     throw new Error('报销单不存在')
@@ -204,57 +318,108 @@ export async function approveReport(reportId: number, comment?: string) {
     throw new Error('当前状态不能审批')
   }
 
-  if (report.currentApproverId !== parseInt(user.id)) {
-    throw new Error('还没轮到您审批')
-  }
-
   const currentApproval = report.approvals.find(
-    (a) => a.approverId === parseInt(user.id) && a.status === 'PENDING'
+    (a) => a.approverId === userId && a.status === 'PENDING'
   )
   if (!currentApproval) {
-    throw new Error('您已审批过此报销单')
+    throw new Error('您没有待审批的任务')
   }
 
-  const nextApproval = report.approvals.find(
-    (a) => a.stepNumber > currentApproval.stepNumber && a.status === 'PENDING'
+  const currentStep = currentApproval.stepNumber
+  const groupId = currentApproval.groupId
+  const nodeId = currentApproval.nodeId
+
+  let approvalType = 'SINGLE'
+  if (nodeId) {
+    const node = await prisma.approvalNode.findUnique({
+      where: { id: nodeId },
+    })
+    if (node) {
+      approvalType = node.approvalType
+    }
+  }
+
+  const actions: any[] = []
+
+  actions.push(
+    prisma.approval.update({
+      where: { id: currentApproval.id },
+      data: {
+        status: 'APPROVED',
+        comment,
+        approvedAt: new Date(),
+      },
+    })
   )
 
-  if (nextApproval) {
-    await prisma.$transaction([
-      prisma.approval.update({
-        where: { id: currentApproval.id },
-        data: {
-          status: 'APPROVED',
-          comment,
-          approvedAt: new Date(),
-        },
-      }),
-      prisma.expenseReport.update({
-        where: { id: reportId },
-        data: {
-          currentApproverId: nextApproval.approverId,
-        },
-      }),
-    ])
-  } else {
-    await prisma.$transaction([
-      prisma.approval.update({
-        where: { id: currentApproval.id },
-        data: {
-          status: 'APPROVED',
-          comment,
-          approvedAt: new Date(),
-        },
-      }),
-      prisma.expenseReport.update({
-        where: { id: reportId },
-        data: {
-          status: 'APPROVED',
-          currentApproverId: null,
-        },
-      }),
-    ])
+  let goToNextStep = false
+
+  if (approvalType === 'SINGLE') {
+    goToNextStep = true
+  } else if (approvalType === 'ANY_SIGN') {
+    if (groupId) {
+      const groupApprovals = report.approvals.filter(
+        (a) => a.groupId === groupId
+      )
+      for (const a of groupApprovals) {
+        if (a.id !== currentApproval.id && a.status === 'PENDING') {
+          actions.push(
+            prisma.approval.update({
+              where: { id: a.id },
+              data: {
+                status: 'APPROVED',
+                comment: '或签已通过',
+                approvedAt: new Date(),
+              },
+            })
+          )
+        }
+      }
+    }
+    goToNextStep = true
+  } else if (approvalType === 'ALL_SIGN') {
+    if (groupId) {
+      const pendingInGroup = report.approvals.filter(
+        (a) => a.groupId === groupId && a.status === 'PENDING'
+      )
+      if (pendingInGroup.length <= 1) {
+        goToNextStep = true
+      }
+    } else {
+      goToNextStep = true
+    }
   }
+
+  if (goToNextStep) {
+    const nextStepApproval = report.approvals.find(
+      (a) => a.stepNumber > currentStep && a.status === 'PENDING'
+    )
+
+    if (nextStepApproval) {
+      actions.push(
+        prisma.expenseReport.update({
+          where: { id: reportId },
+          data: {
+            currentApproverId: nextStepApproval.approverId,
+            currentStepNumber: nextStepApproval.stepNumber,
+          },
+        })
+      )
+    } else {
+      actions.push(
+        prisma.expenseReport.update({
+          where: { id: reportId },
+          data: {
+            status: 'APPROVED',
+            currentApproverId: null,
+            currentStepNumber: 0,
+          },
+        })
+      )
+    }
+  }
+
+  await prisma.$transaction(actions)
 
   revalidatePath('/')
   revalidatePath(`/expenses/${reportId}`)
@@ -269,6 +434,7 @@ export async function rejectReport(reportId: number, comment?: string) {
     throw new Error('未登录')
   }
 
+  const userId = parseInt(user.id)
   const report = await getExpenseReportById(reportId)
   if (!report) {
     throw new Error('报销单不存在')
@@ -278,18 +444,29 @@ export async function rejectReport(reportId: number, comment?: string) {
     throw new Error('当前状态不能审批')
   }
 
-  if (report.currentApproverId !== parseInt(user.id)) {
-    throw new Error('还没轮到您审批')
-  }
-
   const currentApproval = report.approvals.find(
-    (a) => a.approverId === parseInt(user.id) && a.status === 'PENDING'
+    (a) => a.approverId === userId && a.status === 'PENDING'
   )
   if (!currentApproval) {
-    throw new Error('您已审批过此报销单')
+    throw new Error('您没有待审批的任务')
   }
 
-  await prisma.$transaction([
+  const groupId = currentApproval.groupId
+  const nodeId = currentApproval.nodeId
+
+  let approvalType = 'SINGLE'
+  if (nodeId) {
+    const node = await prisma.approvalNode.findUnique({
+      where: { id: nodeId },
+    })
+    if (node) {
+      approvalType = node.approvalType
+    }
+  }
+
+  const actions: any[] = []
+
+  actions.push(
     prisma.approval.update({
       where: { id: currentApproval.id },
       data: {
@@ -297,15 +474,61 @@ export async function rejectReport(reportId: number, comment?: string) {
         comment,
         approvedAt: new Date(),
       },
-    }),
+    })
+  )
+
+  if (approvalType === 'ALL_SIGN' && groupId) {
+    const groupApprovals = report.approvals.filter(
+      (a) => a.groupId === groupId && a.status === 'PENDING'
+    )
+    for (const a of groupApprovals) {
+      if (a.id !== currentApproval.id) {
+        actions.push(
+          prisma.approval.update({
+            where: { id: a.id },
+            data: {
+              status: 'REJECTED',
+              comment: '会签已被拒绝',
+              approvedAt: new Date(),
+            },
+          })
+        )
+      }
+    }
+  }
+
+  if (approvalType === 'ANY_SIGN' && groupId) {
+    const groupApprovals = report.approvals.filter(
+      (a) => a.groupId === groupId && a.status === 'PENDING'
+    )
+    for (const a of groupApprovals) {
+      if (a.id !== currentApproval.id) {
+        actions.push(
+          prisma.approval.update({
+            where: { id: a.id },
+            data: {
+              status: 'REJECTED',
+              comment: '或签已被拒绝',
+              approvedAt: new Date(),
+            },
+          })
+        )
+      }
+    }
+  }
+
+  actions.push(
     prisma.expenseReport.update({
       where: { id: reportId },
       data: {
         status: 'REJECTED',
         currentApproverId: null,
+        currentStepNumber: 0,
       },
-    }),
-  ])
+    })
+  )
+
+  await prisma.$transaction(actions)
 
   revalidatePath('/')
   revalidatePath(`/expenses/${reportId}`)

@@ -47,6 +47,7 @@ const ROLES = [
   { value: 'EMPLOYEE', label: '普通员工' },
   { value: 'MANAGER', label: '部门主管' },
   { value: 'FINANCE', label: '财务' },
+  { value: 'GENERAL_MANAGER', label: '总经理' },
   { value: 'ADMIN', label: '管理员' },
 ]
 

@@ -60,6 +60,7 @@ model User {
   submittedExpenses    ExpenseReport[]     @relation("ExpenseCreator")
   approvals            Approval[]          @relation("ApprovalApprover")
   currentApprovals     ExpenseReport[]     @relation("CurrentApprover")
+  approvalNodeUsers    ApprovalNodeUser[]
 }
 
 model ExpenseReport {
@@ -70,14 +71,18 @@ model ExpenseReport {
   status            String   @default("DRAFT")
   creatorId         Int
   currentApproverId Int?
+  flowId            Int?
+  currentStepNumber Int      @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   submittedAt       DateTime?
 
-  creator          User          @relation("ExpenseCreator", fields: [creatorId], references: [id])
-  currentApprover  User?         @relation("CurrentApprover", fields: [currentApproverId], references: [id])
+  creator          User              @relation("ExpenseCreator", fields: [creatorId], references: [id])
+  currentApprover  User?             @relation("CurrentApprover", fields: [currentApproverId], references: [id])
+  flow             ApprovalFlow?     @relation(fields: [flowId], references: [id])
   items            ExpenseItem[]
   approvals        Approval[]
+  budgetTransactions BudgetTransaction[]
 }
 
 model ExpenseItem {
@@ -94,6 +99,51 @@ model ExpenseItem {
   report ExpenseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
 }
 
+model ApprovalFlow {
+  id            Int      @id @default(autoincrement())
+  name          String
+  description   String?
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  nodes          ApprovalNode[]
+  expenseReports ExpenseReport[]
+}
+
+model ApprovalNode {
+  id             Int      @id @default(autoincrement())
+  flowId         Int
+  stepNumber     Int
+  nodeName       String
+  approvalType   String   @default("SINGLE")
+  approverSource String   @default("ROLE")
+  approverRole   String?
+  conditionType  String   @default("NONE")
+  conditionValue Float?
+  isFinanceNode  Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  flow         ApprovalFlow       @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  nodeUsers    ApprovalNodeUser[]
+  approvals    Approval[]
+}
+
+model ApprovalNodeUser {
+  id        Int      @id @default(autoincrement())
+  nodeId    Int
+  userId    Int
+  orderIndex Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  node ApprovalNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  user User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, userId])
+}
+
 model Approval {
   id          Int      @id @default(autoincrement())
   reportId    Int
@@ -103,9 +153,12 @@ model Approval {
   status      String   @default("PENDING")
   comment     String?
   approvedAt  DateTime?
+  nodeId      Int?
+  groupId     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   report    ExpenseReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
   approver  User          @relation("ApprovalApprover", fields: [approverId], references: [id])
+  node      ApprovalNode? @relation(fields: [nodeId], references: [id], onDelete: SetNull)
 }

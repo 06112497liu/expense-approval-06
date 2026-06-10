@@ -100,22 +100,14 @@ export async function canApproveReport(
 
   if (!report) return false
   if (report.status !== 'PENDING') return false
-  if (report.currentApproverId !== userId) return false
 
   if (userRole === 'ADMIN') return true
 
-  const alreadyApproved = report.approvals.some(
-    (a) => a.approverId === userId && a.status !== 'PENDING'
+  const pendingApproval = report.approvals.find(
+    (a) => a.approverId === userId && a.status === 'PENDING'
   )
-  if (alreadyApproved) return false
 
-  if (userRole === 'MANAGER') {
-    return report.creator.departmentId === userDepartmentId
-  }
+  if (!pendingApproval) return false
 
-  if (userRole === 'FINANCE') {
-    return true
-  }
-
-  return false
+  return true
 }
