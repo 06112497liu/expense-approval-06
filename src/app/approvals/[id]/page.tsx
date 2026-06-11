@@ -1,5 +1,5 @@
 import { notFound, redirect } from 'next/navigation'
-import { requireAuth, canApproveReport } from '@/lib/permissions'
+import { requireAuth, canApproveReport, canViewExpenseReport } from '@/lib/permissions'
 import { getExpenseReportById } from '@/lib/queries'
 import { ApprovalDetailClient } from '@/components/ApprovalDetailClient'
 
@@ -10,15 +10,22 @@ export default async function ApprovalDetailPage({
 }) {
   const user = await requireAuth()
 
-  if (user.role === 'EMPLOYEE') {
-    redirect('/')
-  }
-
   const reportId = parseInt(params.id)
 
   const report = await getExpenseReportById(reportId)
   if (!report) {
     notFound()
+  }
+
+  const canView = await canViewExpenseReport(
+    parseInt(user.id),
+    user.role,
+    user.departmentId,
+    reportId
+  )
+
+  if (!canView && user.role !== 'ADMIN') {
+    redirect('/approvals')
   }
 
   const canApprove = await canApproveReport(
@@ -27,14 +34,6 @@ export default async function ApprovalDetailPage({
     user.departmentId,
     reportId
   )
-
-  if (!canApprove && report.status !== 'APPROVED' && report.status !== 'REJECTED') {
-    if (report.creator.departmentId !== user.departmentId || user.role !== 'MANAGER') {
-      if (user.role !== 'ADMIN') {
-        redirect('/approvals')
-      }
-    }
-  }
 
   return (
     <ApprovalDetailClient report={report} canApprove={canApprove} />

@@ -73,7 +73,8 @@ export function Navbar() {
             user.role === 'MANAGER' ||
             user.role === 'FINANCE' ||
             user.role === 'ADMIN' ||
-            user.role === 'GENERAL_MANAGER',
+            user.role === 'GENERAL_MANAGER' ||
+            user.role === 'EMPLOYEE',
         },
         {
           href: '/history',

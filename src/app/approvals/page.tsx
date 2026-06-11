@@ -7,10 +7,6 @@ import { CheckSquare, Inbox, Eye } from 'lucide-react'
 export default async function ApprovalsPage() {
   const user = await requireAuth()
 
-  if (user.role === 'EMPLOYEE') {
-    redirect('/')
-  }
-
   const pendingApprovals = await getPendingApprovalsForUserV2(
     parseInt(user.id),
     user.role,

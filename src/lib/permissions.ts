@@ -49,6 +49,11 @@ export async function canViewExpenseReport(
     return report.creatorId === userId
   }
 
+  const pendingApproval = report.approvals.find(
+    (a) => a.approverId === userId && a.status === 'PENDING'
+  )
+  if (pendingApproval) return true
+
   if (userRole === 'MANAGER' && userDepartmentId) {
     if (report.creator.departmentId === userDepartmentId) {
       if (report.status === 'PENDING' && report.currentApproverId === userId) {
