@@ -339,6 +339,10 @@ export async function approveReport(reportId: number, comment?: string) {
     throw new Error('您没有待审批的任务')
   }
 
+  if (currentApproval.stepNumber !== report.currentStepNumber) {
+    throw new Error('当前不是您的审批轮次，请等待前序审批人完成审批')
+  }
+
   const currentStep = currentApproval.stepNumber
   const groupId = currentApproval.groupId
   const nodeId = currentApproval.nodeId
@@ -499,6 +503,10 @@ export async function rejectReport(reportId: number, comment?: string) {
   )
   if (!currentApproval) {
     throw new Error('您没有待审批的任务')
+  }
+
+  if (currentApproval.stepNumber !== report.currentStepNumber) {
+    throw new Error('当前不是您的审批轮次，请等待前序审批人完成审批')
   }
 
   const groupId = currentApproval.groupId

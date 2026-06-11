@@ -253,6 +253,7 @@ export async function getPendingApprovalsForUserV2(
   return prisma.expenseReport.findMany({
     where: {
       status: 'PENDING',
+      currentApproverId: userId,
       approvals: {
         some: {
           approverId: userId,
