@@ -148,6 +148,20 @@ export async function submitExpenseReport(reportId: number) {
     return submitExpenseReportFallback(reportId, departmentId)
   }
 
+  const sortedNodes = [...approvalFlow.nodes].sort((a, b) => a.stepNumber - b.stepNumber)
+  const nonFinanceNodes = sortedNodes.filter(n => !n.isFinanceNode)
+  const financeNode = sortedNodes.find(n => n.isFinanceNode)
+
+  const orderedNodes = [...nonFinanceNodes]
+  if (financeNode) {
+    orderedNodes.push(financeNode)
+  }
+
+  const hasFinanceNode = orderedNodes.some(n => n.isFinanceNode)
+  if (!hasFinanceNode) {
+    throw new Error('审批流中缺少财务审批节点，请先配置审批流')
+  }
+
   await prisma.approval.deleteMany({
     where: { reportId },
   })
@@ -164,7 +178,7 @@ export async function submitExpenseReport(reportId: number) {
   let stepCounter = 0
   let firstApproverId: number | null = null
 
-  for (const node of approvalFlow.nodes) {
+  for (const node of orderedNodes) {
     if (node.conditionType === 'AMOUNT_GREATER_THAN' && node.conditionValue) {
       if (report.totalAmount <= node.conditionValue) {
         continue
@@ -174,7 +188,7 @@ export async function submitExpenseReport(reportId: number) {
     stepCounter++
     const groupId =
       node.approvalType !== 'SINGLE'
-        ? `node-${node.id}-${Date.now()}`
+        ? `node-${node.id}-${Date.now()}-${stepCounter}`
         : null
 
     const approvers = await getNodeApprovers(node, departmentId)
@@ -406,6 +420,42 @@ export async function approveReport(reportId: number, comment?: string) {
         })
       )
     } else {
+      const nodeIdsToCheck = report.approvals
+        .filter((a) => a.nodeId)
+        .map((a) => a.nodeId!)
+        .filter((v, i, arr) => arr.indexOf(v) === i)
+
+      let hasFinanceNode = false
+      if (nodeIdsToCheck.length > 0) {
+        const nodes = await prisma.approvalNode.findMany({
+          where: { id: { in: nodeIdsToCheck } },
+        })
+        hasFinanceNode = nodes.some((n) => n.isFinanceNode)
+      }
+
+      const hasFinanceRole = report.approvals.some((a) => a.role === 'FINANCE')
+
+      if (hasFinanceNode || hasFinanceRole) {
+        const financeApproved = report.approvals.some(
+          (a) =>
+            (a.role === 'FINANCE' && a.status === 'APPROVED') ||
+            (a.status === 'APPROVED' &&
+              a.nodeId &&
+              (() => {
+                return false
+              })())
+        )
+
+        if (!financeApproved) {
+          const allFinished = report.approvals.every(
+            (a) => a.status === 'APPROVED' || a.status === 'REJECTED'
+          )
+          if (allFinished) {
+            throw new Error('系统检测到异常：财务审批节点未完成，不能归档。请联系管理员检查审批流配置。')
+          }
+        }
+      }
+
       actions.push(
         prisma.expenseReport.update({
           where: { id: reportId },

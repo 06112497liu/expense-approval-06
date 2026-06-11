@@ -191,27 +191,26 @@ export async function addApprovalNode(flowId: number, data: {
   }
 
   const sortedNodes = [...flow.nodes].sort((a, b) => a.stepNumber - b.stepNumber)
-  const nonFinanceNodes = sortedNodes.filter(n => !n.isFinanceNode)
-  const hasExistingFinanceNode = sortedNodes.some(n => n.isFinanceNode)
+  const existingNonFinanceNodes = sortedNodes.filter(n => !n.isFinanceNode)
+  const existingFinanceNode = sortedNodes.find(n => n.isFinanceNode)
 
-  let stepNumber: number
+  let newNonFinanceNodes = [...existingNonFinanceNodes.map(n => ({ id: n.id }))]
+  newNonFinanceNodes.push({ id: 0 })
+
+  let finalOrder: { id: number }[]
   if (isFinanceNode) {
-    stepNumber = nonFinanceNodes.length + 1
+    finalOrder = [...existingNonFinanceNodes.map(n => ({ id: n.id })), { id: 0 }]
   } else {
-    stepNumber = nonFinanceNodes.length + 1
-    if (hasExistingFinanceNode) {
-      stepNumber = stepNumber
-    } else {
-      stepNumber = sortedNodes.length + 1
+    finalOrder = [...newNonFinanceNodes]
+    if (existingFinanceNode) {
+      finalOrder.push({ id: existingFinanceNode.id })
     }
   }
-
-  const actions: any[] = []
 
   const node = await prisma.approvalNode.create({
     data: {
       flowId,
-      stepNumber,
+      stepNumber: 999,
       nodeName: data.nodeName,
       approvalType: data.approvalType,
       approverSource: data.approverSource,
@@ -222,16 +221,16 @@ export async function addApprovalNode(flowId: number, data: {
     },
   })
 
-  if (isFinanceNode) {
-    const reordered = [...nonFinanceNodes.map(n => ({ id: n.id })), { id: node.id }]
-    for (let i = 0; i < reordered.length; i++) {
-      actions.push(
-        prisma.approvalNode.update({
-          where: { id: reordered[i].id },
-          data: { stepNumber: i + 1 },
-        })
-      )
-    }
+  finalOrder = finalOrder.map(item => ({ id: item.id === 0 ? node.id : item.id }))
+
+  const actions: any[] = []
+  for (let i = 0; i < finalOrder.length; i++) {
+    actions.push(
+      prisma.approvalNode.update({
+        where: { id: finalOrder[i].id },
+        data: { stepNumber: i + 1 },
+      })
+    )
   }
 
   if (actions.length > 0) {
@@ -276,7 +275,9 @@ export async function updateApprovalNode(nodeId: number, data: {
   }
 
   const isFinanceNode = data.approverRole === 'FINANCE'
-  const becomingFinanceNode = isFinanceNode && !node.isFinanceNode
+  const wasFinanceNode = node.isFinanceNode
+  const becomingFinanceNode = isFinanceNode && !wasFinanceNode
+  const losingFinanceNode = !isFinanceNode && wasFinanceNode
 
   if (becomingFinanceNode) {
     const hasFinanceNode = await prisma.approvalNode.findFirst({
@@ -287,22 +288,22 @@ export async function updateApprovalNode(nodeId: number, data: {
     }
   }
 
-  const actions: any[] = []
+  if (losingFinanceNode) {
+    throw new Error('不能将财务审批节点改为非财务节点')
+  }
 
-  actions.push(
-    prisma.approvalNode.update({
-      where: { id: nodeId },
-      data: {
-        nodeName: data.nodeName,
-        approvalType: data.approvalType,
-        approverSource: data.approverSource,
-        approverRole: data.approverRole || null,
-        conditionType: data.conditionType,
-        conditionValue: data.conditionValue || null,
-        isFinanceNode,
-      },
-    })
-  )
+  await prisma.approvalNode.update({
+    where: { id: nodeId },
+    data: {
+      nodeName: data.nodeName,
+      approvalType: data.approvalType,
+      approverSource: data.approverSource,
+      approverRole: data.approverRole || null,
+      conditionType: data.conditionType,
+      conditionValue: data.conditionValue || null,
+      isFinanceNode,
+    },
+  })
 
   if (becomingFinanceNode) {
     const allNodes = await prisma.approvalNode.findMany({
@@ -310,7 +311,9 @@ export async function updateApprovalNode(nodeId: number, data: {
       orderBy: { stepNumber: 'asc' },
     })
     const nonFinanceNodes = allNodes.filter(n => n.id !== nodeId && !n.isFinanceNode)
-    const reordered = [...nonFinanceNodes, { id: nodeId, isFinanceNode: true } as any]
+    const reordered = [...nonFinanceNodes, { id: nodeId }]
+
+    const actions: any[] = []
     for (let i = 0; i < reordered.length; i++) {
       actions.push(
         prisma.approvalNode.update({
@@ -319,9 +322,8 @@ export async function updateApprovalNode(nodeId: number, data: {
         })
       )
     }
+    await prisma.$transaction(actions)
   }
-
-  await prisma.$transaction(actions)
 
   await prisma.approvalNodeUser.deleteMany({
     where: { nodeId },
@@ -390,15 +392,23 @@ export async function saveNodeOrder(flowId: number, nodeOrders: { nodeId: number
   }
 
   const financeNode = flow.nodes.find(n => n.isFinanceNode)
-  const financeOrder = nodeOrders.find(o => o.nodeId === financeNode?.id)
-  const maxStep = Math.max(...nodeOrders.map(o => o.stepNumber))
 
-  if (financeNode && financeOrder && financeOrder.stepNumber !== maxStep) {
-    throw new Error('财务审批节点必须是最后一个')
+  const sortedByStep = [...nodeOrders].sort((a, b) => a.stepNumber - b.stepNumber)
+  const nonFinanceOrders = sortedByStep.filter(o => o.nodeId !== financeNode?.id)
+  const finalOrders: { nodeId: number; stepNumber: number }[] = nonFinanceOrders.map((o, i) => ({
+    nodeId: o.nodeId,
+    stepNumber: i + 1
+  }))
+
+  if (financeNode) {
+    finalOrders.push({
+      nodeId: financeNode.id,
+      stepNumber: finalOrders.length + 1
+    })
   }
 
   await prisma.$transaction(
-    nodeOrders.map(order =>
+    finalOrders.map(order =>
       prisma.approvalNode.update({
         where: { id: order.nodeId },
         data: { stepNumber: order.stepNumber },
